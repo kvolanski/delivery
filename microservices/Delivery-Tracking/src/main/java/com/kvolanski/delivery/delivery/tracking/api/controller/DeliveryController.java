@@ -1,8 +1,10 @@
 package com.kvolanski.delivery.delivery.tracking.api.controller;
 
+import com.kvolanski.delivery.delivery.tracking.api.model.CourierIdInput;
 import com.kvolanski.delivery.delivery.tracking.api.model.DeliveryInput;
 import com.kvolanski.delivery.delivery.tracking.domain.model.Delivery;
 import com.kvolanski.delivery.delivery.tracking.domain.repository.DeliveryRepository;
+import com.kvolanski.delivery.delivery.tracking.domain.service.DeliveryCheckPointService;
 import com.kvolanski.delivery.delivery.tracking.domain.service.DeliveryPreparationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +23,8 @@ import java.util.UUID;
 public class DeliveryController {
 
     private final DeliveryPreparationService deliveryPreparationService;
+    private final DeliveryCheckPointService deliveryCheckPointService;
+
     private final DeliveryRepository deliveryRepository;
 
     @PostMapping
@@ -44,6 +48,21 @@ public class DeliveryController {
     @GetMapping("/{deliveryId}")
     public Delivery findById(@PathVariable UUID deliveryId){
         return deliveryRepository.findById(deliveryId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    }
+
+    @PostMapping("/{deliveryId}/placement")
+    public void place(@PathVariable UUID deliveryId){
+        deliveryCheckPointService.place(deliveryId);
+    }
+
+    @PostMapping("/{deliveryId}/pickups")
+    public void pickup(@PathVariable UUID deliveryId, @Valid @RequestBody CourierIdInput input){
+        deliveryCheckPointService.pickup(deliveryId, input.getCourierId());
+    }
+
+    @PostMapping("/{deliveryId}/completion")
+    public void completion(@PathVariable UUID deliveryId){
+        deliveryCheckPointService.complete(deliveryId);
     }
 
 
