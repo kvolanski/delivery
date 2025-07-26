@@ -1,8 +1,12 @@
 package com.kvolanski.delivery.delivery.tracking.domain.model;
 
+import com.kvolanski.delivery.delivery.tracking.domain.event.DeliveryFulfilledEvent;
+import com.kvolanski.delivery.delivery.tracking.domain.event.DeliveryPickUpEvent;
+import com.kvolanski.delivery.delivery.tracking.domain.event.DeliveryPlacedEvent;
 import com.kvolanski.delivery.delivery.tracking.domain.exception.DomainException;
 import jakarta.persistence.*;
 import lombok.*;
+import org.springframework.data.domain.AbstractAggregateRoot;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -11,20 +15,21 @@ import java.util.*;
 
 @Entity
 @NoArgsConstructor(access = AccessLevel.PACKAGE)
-@EqualsAndHashCode(onlyExplicitlyIncluded = true)
+@EqualsAndHashCode(onlyExplicitlyIncluded = true, callSuper = false)
 @Setter(AccessLevel.PRIVATE)
 @Getter
-public class Delivery {
+public class Delivery extends AbstractAggregateRoot<Delivery> {
 
     @Id
     @EqualsAndHashCode.Include
     private UUID id;
+
     private UUID courierId;
 
     private DeliveryStatus status;
 
-    private OffsetDateTime placeAt;
-    private OffsetDateTime assignAt;
+    private OffsetDateTime placedAt;
+    private OffsetDateTime assignedAt;
     private OffsetDateTime expectedDeliveryAt;
     private OffsetDateTime fulfilledAt;
 
@@ -59,30 +64,45 @@ public class Delivery {
     @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true, mappedBy = "delivery")
     private List<Item> items = new ArrayList<>();
 
-
-    public static Delivery draft(){
-         Delivery delivery = new Delivery();
-         delivery.setId(UUID.randomUUID());
-         delivery.setStatus(DeliveryStatus.DRAFT);
-         delivery.setTotalItems(0);
-         delivery.setTotalCost(BigDecimal.ZERO);
-         delivery.setCourierPayout(BigDecimal.ZERO);
-         delivery.setDistanceFee(BigDecimal.ZERO);
-         return delivery;
+    public static Delivery draft() {
+        Delivery delivery = new Delivery();
+        delivery.setId(UUID.randomUUID());
+        delivery.setStatus( DeliveryStatus.DRAFT);
+        delivery.setTotalItems(0);
+        delivery.setTotalCost(BigDecimal.ZERO);
+        delivery.setCourierPayout(BigDecimal.ZERO);
+        delivery.setDistanceFee(BigDecimal.ZERO);
+        return delivery;
     }
 
-    public void removeItem(UUID itemId){
+    public UUID addItem(String name, int quantity) {
+        Item item = Item.brandNew(name, quantity, this);
+        items.add(item);
+        calculateTotalItems();
+        return item.getId();
+    }
+
+    public void removeItem(UUID itemId) {
         items.removeIf(item -> item.getId().equals(itemId));
-        calculateTotamItems();
+        calculateTotalItems();
     }
 
-    public void removeItems(){
+    public void changeItemQuantity(UUID itemId, int quantity) {
+        Item item = getItems().stream().filter(i -> i.getId().equals(itemId))
+                .findFirst().orElseThrow();
+
+        item.setQuantity(quantity);
+        calculateTotalItems();
+    }
+
+    public void removeItems() {
         items.clear();
-        calculateTotamItems();
+        calculateTotalItems();
     }
 
-    public void editPreparationDetails(PreparationDetails details){
-        verifyIfCanEdited();
+    public void editPreparationDetails(PreparationDetails details) {
+        verifyIfCanBeEdited();
+
         setSender(details.getSender());
         setRecipient(details.getRecipient());
         setDistanceFee(details.getDistanceFee());
@@ -92,68 +112,62 @@ public class Delivery {
         setTotalCost(this.getDistanceFee().add(this.getCourierPayout()));
     }
 
-    public void place(){
-        verifyIfCanPlaced();
+    public void place() {
+        verifyIfCanBePlaced();
         this.changeStatusTo(DeliveryStatus.WAITING_FOR_COURIER);
-        this.setPlaceAt(OffsetDateTime.now());
+        this.setPlacedAt(OffsetDateTime.now());
+        super.registerEvent(new DeliveryPlacedEvent(this.getPlacedAt(), this.getId()));
     }
 
-    public void pickUp(UUID courierId){
+    public void pickUp(UUID courierId) {
         this.setCourierId(courierId);
         this.changeStatusTo(DeliveryStatus.IN_TRANSIT);
-        this.setAssignAt(OffsetDateTime.now());
+        this.setAssignedAt(OffsetDateTime.now());
+        super.registerEvent(new DeliveryPickUpEvent(this.getAssignedAt(), this.getId()));
     }
 
-    public void markAsDelivered(){
+    public void markAsDelivered() {
         this.changeStatusTo(DeliveryStatus.DELIVERED);
         this.setFulfilledAt(OffsetDateTime.now());
-    }
-
-    public void changeItemQuantity(UUID itemId, int quantity){
-        Item item = getItems().stream().filter(i -> i.getId().equals(itemId)).findFirst().orElseThrow();
-
-        item.setQuantity(quantity);
-        calculateTotamItems();
-    }
-
-    public UUID addItem(String name, int quantity){
-        Item item = Item.brandNew(name, quantity, this);
-        items.add(item);
-        calculateTotamItems();
-        return item.getId();
+        super.registerEvent(new DeliveryFulfilledEvent(this.getFulfilledAt(), this.getId()));
     }
 
     public List<Item> getItems() {
         return Collections.unmodifiableList(this.items);
     }
 
-    private void calculateTotamItems(){
-        int totalItems = items.stream().mapToInt(Item::getQuantity).sum();
+    private void calculateTotalItems() {
+        int totalItems = getItems().stream().mapToInt(Item::getQuantity).sum();
         setTotalItems(totalItems);
     }
 
-    private void verifyIfCanPlaced(){
-        if (!isFilled()){
+    private void verifyIfCanBePlaced() {
+        if (!isFilled()) {
             throw new DomainException();
         }
-        if (!getStatus().equals(DeliveryStatus.DRAFT)){
-            throw new DomainException();
-        }
-    }
-
-    private void verifyIfCanEdited(){
-        if (!getStatus().equals(DeliveryStatus.DRAFT)){
+        if (!getStatus().equals(DeliveryStatus.DRAFT)) {
             throw new DomainException();
         }
     }
 
-    private boolean isFilled(){
-        return this.getSender() != null && this.getRecipient() != null && this.totalCost != null;
+    private void verifyIfCanBeEdited() {
+        if (!getStatus().equals(DeliveryStatus.DRAFT)) {
+            throw new DomainException();
+        }
     }
 
-    private void changeStatusTo(DeliveryStatus newStatus) throws DomainException {
-        if (newStatus != null && this.getStatus().canNotChangeTo(newStatus)){
-            throw new DomainException("Invalid status transition from " + this.getStatus() + " to " + newStatus);
+    private boolean isFilled() {
+        return this.getSender() != null
+                && this.getRecipient() != null
+                && this.getTotalCost() != null;
+    }
+
+    private void changeStatusTo(DeliveryStatus newStatus) {
+        if (newStatus != null && this.getStatus().canNotChangeTo(newStatus)) {
+            throw new DomainException(
+                    "Invalid status transition from " + this.getStatus() +
+                            " to " + newStatus
+            );
         }
         this.setStatus(newStatus);
     }
@@ -161,14 +175,11 @@ public class Delivery {
     @Getter
     @AllArgsConstructor
     @Builder
-    public static class PreparationDetails{
+    public static class PreparationDetails {
         private ContactPoint sender;
         private ContactPoint recipient;
         private BigDecimal distanceFee;
         private BigDecimal courierPayout;
         private Duration expectedDeliveryTime;
-
     }
-
-
 }
