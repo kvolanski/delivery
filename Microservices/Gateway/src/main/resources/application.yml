@@ -14,6 +14,22 @@ spring:
           uri: lb://courier-management
           predicates:
             - Path=/api/v1/couriers/**
+        - id: courier-management-public
+          uri: lb://courier-management
+          predicates:
+            - Path=/public/couriers
+            - Method=GET
+          filters:
+            - RewritePath=/public/couriers, /api/v1/couriers
+            - RemoveJsonAttributesResponseBody=pendingDeliveries, pendingDeliviriesQuantity, phone, true
+        - id: courier-management-public-segments-route
+          uri: lb://courier-management
+          predicates:
+            - Path=/public/couriers/**
+            - Method=GET
+          filters:
+            - RewritePath=/public/couriers/?(?<segment>.*), /api/v1/couriers/$\{segment}
+            - RemoveJsonAttributesResponseBody=pendingDeliveries, pendingDeliviriesQuantity, phone, true
   eureka:
     client:
       register-with-eureka: false
